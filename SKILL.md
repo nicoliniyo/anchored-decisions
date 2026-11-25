@@ -1,0 +1,109 @@
+---
+name: anchored-decisions
+description: Record and verify engineering decisions so work resumes from what was already decided instead of re-deriving it. Use when starting or resuming work on a feature, ticket or workstream, when a choice is made that future sessions must not re-litigate, before building on a prior decision or ADR, when the user says "what did we decide", "is this still true", "why is it built this way", "check the decision anchors", "record this decision", "start a decision log", or invokes /anchored-decisions. Works in any repository; wraps the anchor-check CLI.
+---
+
+# Anchored decisions
+
+Keeps written decisions aligned with the **current** state of the code, so a returning session
+re-derives only what actually drifted. Repository-agnostic: no required folder layout, no
+dependencies beyond Python 3.8+.
+
+Two rules carry the whole system:
+
+1. **Never record what can be derived.** Branch/PR/deploy state, which files changed, who calls
+   what — all live in git, the forge, and code-intelligence tools. A typed copy rots.
+   Record only decisions, their rationale, and hard-won constraints.
+2. **Every decision carries anchors** — verifiable handles into the repo — plus a `Verified:`
+   date. That turns "is this still true?" into a command instead of an investigation.
+
+## The tool
+
+```bash
+anchor-check                 # discover and check every DECISIONS.md in the repo
+anchor-check <dir|file|name> # one record set
+anchor-check --init          # scaffold a DECISIONS.md here
+anchor-check --new "TITLE"   # append a record skeleton with the next free id
+anchor-check --quiet         # only what needs attention
+anchor-check --json          # for CI or a dashboard
+anchor-check --max-age 60    # stricter expiry window
+```
+
+If `anchor-check` is not on PATH, run `anchor-check.py` from this skill's own folder.
+Exit code `1` whenever something needs attention — usable as a pre-commit hook or CI gate.
+
+Root resolution: `--root`, else the nearest `.anchors.json`, else the nearest `.git`, else cwd.
+Anchors resolve relative to the repo root first, then to the record file's own directory, so both
+single-repo and monorepo layouts work unchanged.
+
+## Per-repo configuration (optional)
+
+Only needed when records do not live at a discoverable `DECISIONS.md`, or defaults need changing.
+`.anchors.json` at the repo root:
+
+```json
+{
+  "paths":       ["tickets/*/DECISIONS.md"],
+  "exclude":     ["archive/**"],
+  "anchor_base": ".",
+  "max_age":     90
+}
+```
+
+Without it, discovery walks the tree for files named `DECISIONS.md`, skipping build and vendor
+directories and any directory whose name starts with `_` (so templates never report as failures).
+
+## Resuming work — tiered, stop as early as you can
+
+| Tier | When | What |
+|---|---|---|
+| 0 | always (~2 min) | read the decision log, run `anchor-check`, `git log` the affected paths since the newest `Verified` date |
+| 1 | the check flags something | read the flagged anchor's current source — did the code move under the decision, or was the file merely touched nearby? |
+| 2 | Tier 1 inconclusive | recover the original reasoning (session transcripts, PR discussion, issue history), re-derive, then **supersede** the record |
+
+Escalate on evidence of drift, never on principle. Most sessions stop at Tier 0.
+
+## Reading the verdicts
+
+| Verdict | Meaning | Action |
+|---|---|---|
+| `ok` | anchor resolves, file untouched since verification | trust it |
+| `man` | needs a human (PR, issue, live environment) | confirm if the decision is load-bearing for this change |
+| `STALE` | the anchored file was committed **after** the decision was verified | Tier 1 |
+| `BROK` | path gone, or symbol renamed/removed | Tier 1–2 |
+| `EXP` | verification older than `max_age` | re-confirm, especially live-environment claims |
+| `MALF` | missing Status/Verified, no anchors, ACTIVE-but-superseded | fix the record |
+
+## Writing a decision
+
+Add the record **when the choice is made**, not at the end of the work. Required: `Status`,
+`Decided`, `Verified` (date + where), at least one anchor, `Why`, and `Why not`.
+
+`Why not` is the one line nothing else on disk records — the diff shows what was built, never what
+was rejected. A decision without it gets re-litigated.
+
+Anchor kinds: machine-checked `code` `test` `sql` `config` `file` `doc` (optional `#symbol`);
+manual `pr` `issue` `jira` `ticket` `url` `env` `data` `ship` `release` `person` — give these their
+own date (`env: prod@2026-01-30 — …`) so live-environment claims expire instead of hardening into
+assumed fact.
+
+Templates for a decision log, a steering file and an open question: `templates/` in this skill.
+
+## Write-back rule
+
+A change that invalidates a decision updates it **in the same commit** — bump `Verified:`, or add
+a record with `Supersedes:` and set the old one to `SUPERSEDED`. Never delete: the superseded
+record is where the why-not lives.
+
+## Open questions
+
+Keep unresolved items as their own records or files, each marked `engineering-open` (we can settle
+it with evidence) or `needs-a-decider` (a business call — never resolve it by writing code; name
+the decider). When answered, promote the answer to a decision with anchors.
+
+## Scope control
+
+State scope as a diff against what is **deployed** ("prod runs v1.87.14; this adds X"), never
+against a design document. Deployed versions are checkable; design intent is not.
+
+Full procedure with worked examples: `GUIDE.md` in this skill.

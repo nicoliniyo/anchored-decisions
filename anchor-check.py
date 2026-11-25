@@ -1,0 +1,527 @@
+#!/usr/bin/env python3
+"""
+anchor-check - verify that recorded decisions still match the code.
+
+A decision record carries *anchors*: verifiable handles into the repo (a file, a
+symbol, a migration, a config key) plus the date it was last verified. This tool
+resolves every anchor and reports which decisions can no longer be trusted, so a
+returning session re-derives only what actually drifted.
+
+Works in any repository. No third-party dependencies - stdlib only, Python 3.8+.
+
+    anchor-check                      # discover and check every DECISIONS.md
+    anchor-check docs/DECISIONS.md    # one file
+    anchor-check TICKET-42            # a directory (by name or path)
+    anchor-check --init               # scaffold a DECISIONS.md here
+    anchor-check --new "Use Postgres advisory locks"
+    anchor-check --max-age 60 --quiet
+    anchor-check --json
+
+Optional per-repo config, `.anchors.json` at the repo root:
+
+    {
+      "paths":       ["tickets/*/DECISIONS.md"],   // where records live
+      "exclude":     ["archive/**"],               // globs to skip
+      "anchor_base": ".",                          // anchors resolve from here
+      "max_age":     90                            // days before a check expires
+    }
+
+Exit codes:  0 = everything verifiable is current
+             1 = at least one STALE / EXPIRED / BROKEN / MALFORMED finding
+             2 = usage or parse error
+"""
+
+from __future__ import annotations
+
+import argparse
+import json
+import os
+import re
+import subprocess
+import sys
+from dataclasses import dataclass, field, asdict
+from datetime import date, datetime, timedelta
+from pathlib import Path
+
+__version__ = "1.0.0"
+
+CONFIG_NAME = ".anchors.json"
+RECORD_NAME = "DECISIONS.md"
+
+# directories never worth walking into when discovering records
+PRUNE = {".git", ".hg", ".svn", "node_modules", "target", "build", "dist", "out",
+         "vendor", ".venv", "venv", "__pycache__", ".idea", ".vscode", ".gradle",
+         ".mvn", ".tox", ".next", ".cache", "coverage",
+         # agent tooling - a skill's own templates are not this repo's decisions
+         ".claude", ".agents", ".cursor", ".aider"}
+
+
+# --------------------------------------------------------------------------
+# Repo layout - all of this is convention-free
+# --------------------------------------------------------------------------
+
+def find_root(start: Path, explicit: str | None) -> tuple[Path, dict]:
+    """Root = --root, else nearest .anchors.json, else nearest .git, else cwd."""
+    if explicit:
+        root = Path(explicit).resolve()
+        return root, load_config(root / CONFIG_NAME)
+
+    # Nearest marker wins, whichever kind it is: an independent repo nested under a
+    # configured workspace is its own root, not part of the parent's record set.
+    cur = start.resolve()
+    for cand in [cur, *cur.parents]:
+        cfg_file = cand / CONFIG_NAME
+        if cfg_file.is_file():
+            return cand, load_config(cfg_file)
+        if (cand / ".git").exists():
+            return cand, {}
+    return cur, {}
+
+
+def load_config(path: Path) -> dict:
+    try:
+        cfg = json.loads(path.read_text(encoding="utf-8"))
+        return cfg if isinstance(cfg, dict) else {}
+    except (OSError, ValueError):
+        return {}
+
+
+def nearest_git_repo(path: Path) -> Path | None:
+    """Monorepos and submodule trees hold many repos; find the owning one."""
+    for cand in [path if path.is_dir() else path.parent, *path.parents]:
+        if (cand / ".git").exists():
+            return cand
+    return None
+
+
+def git_last_change(path: Path) -> date | None:
+    repo = nearest_git_repo(path)
+    if repo is None:
+        return None
+    try:
+        rel = path.relative_to(repo)
+        out = subprocess.run(["git", "-C", str(repo), "log", "-1", "--format=%cI", "--", str(rel)],
+                             capture_output=True, text=True, timeout=20)
+    except (subprocess.SubprocessError, ValueError, OSError):
+        return None
+    stamp = out.stdout.strip()
+    if not stamp:
+        return None
+    try:
+        return datetime.fromisoformat(stamp).date()
+    except ValueError:
+        return None
+
+
+# --------------------------------------------------------------------------
+# Parsing
+# --------------------------------------------------------------------------
+
+STATUSES = {"ACTIVE", "PROPOSED", "SUPERSEDED", "REVERTED"}
+
+HEAD_RE = re.compile(r"^##\s+(?P<id>[A-Z]{1,4}-\d+)\s*[-–—]\s*(?P<title>.+?)\s*$")
+FIELD_RE = re.compile(r"^\s*[-*]\s*(?P<key>[A-Za-z][A-Za-z-]*)\s*:\s*(?P<val>.*?)\s*$")
+ANCHOR_RE = re.compile(r"^\s{2,}[-*]\s*(?P<kind>[a-z]+)\s*:\s*(?P<val>.+?)\s*$")
+DATE_RE = re.compile(r"(\d{4}-\d{2}-\d{2})")
+
+
+@dataclass
+class Finding:
+    level: str            # OK | MANUAL | EXPIRED | STALE | BROKEN | MALFORMED
+    anchor: str
+    detail: str
+
+
+@dataclass
+class Decision:
+    id: str
+    title: str
+    file: str
+    line: int
+    status: str = ""
+    decided: str = ""
+    verified: str = ""
+    supersedes: str = ""
+    superseded_by: str = ""
+    anchors: list = field(default_factory=list)
+    findings: list = field(default_factory=list)
+
+    @property
+    def verdict(self) -> str:
+        levels = {f.level for f in self.findings}
+        for lvl in ["BROKEN", "STALE", "EXPIRED", "MALFORMED", "MANUAL", "OK"]:
+            if lvl in levels:
+                return lvl
+        return "OK"
+
+
+def parse_decisions(path: Path) -> list:
+    decisions, cur, in_anchors, in_comment = [], None, False, False
+    for n, raw in enumerate(path.read_text(encoding="utf-8").splitlines(), 1):
+        line = raw.rstrip()
+
+        # commented-out records are documentation, not live claims
+        if in_comment:
+            if "-->" in line:
+                in_comment = False
+            continue
+        if "<!--" in line and "-->" not in line:
+            in_comment = True
+            continue
+
+        head = HEAD_RE.match(line)
+        if head:
+            cur = Decision(id=head.group("id"), title=head.group("title"),
+                           file=str(path), line=n)
+            decisions.append(cur)
+            in_anchors = False
+            continue
+        if cur is None:
+            continue
+        if line.startswith("## ") or line.startswith("# "):
+            cur, in_anchors = None, False
+            continue
+
+        if in_anchors:
+            anchor = ANCHOR_RE.match(line)
+            if anchor:
+                cur.anchors.append((anchor.group("kind"), anchor.group("val")))
+                continue
+
+        fld = FIELD_RE.match(line)
+        if fld:
+            key, val = fld.group("key").lower(), fld.group("val")
+            in_anchors = key == "anchors"
+            if key == "status":
+                cur.status = val.split("#")[0].strip().upper()
+            elif key == "decided":
+                cur.decided = val
+            elif key == "verified":
+                cur.verified = val
+            elif key == "supersedes":
+                cur.supersedes = val
+            elif key in ("superseded-by", "supersededby"):
+                cur.superseded_by = val
+        elif line and not line.startswith(" "):
+            in_anchors = False
+    return decisions
+
+
+def parse_date(text: str):
+    m = DATE_RE.search(text or "")
+    return date.fromisoformat(m.group(1)) if m else None
+
+
+# --------------------------------------------------------------------------
+# Anchor verification
+# --------------------------------------------------------------------------
+
+DERIVABLE = {"code", "test", "sql", "config", "file", "doc"}      # resolved against the tree
+MANUAL = {"pr", "issue", "jira", "ticket", "url", "env", "data", "ship", "release", "person"}
+
+
+def split_target(value: str):
+    if "#" in value:
+        p, _, sym = value.partition("#")
+        return p.strip(), sym.strip()
+    return value.strip(), None
+
+
+def resolve(rel: str, bases: list):
+    """Anchors may be written relative to the repo root or to their own file."""
+    for base in bases:
+        cand = (base / rel)
+        if cand.exists():
+            return cand.resolve()
+    return None
+
+
+def check_anchor(kind: str, value: str, bases: list, verified, max_age: int) -> Finding:
+    label = f"{kind}: {value}"
+
+    if kind in DERIVABLE:
+        rel, symbol = split_target(value)
+        target = resolve(rel, bases)
+        if target is None:
+            return Finding("BROKEN", label, f"path does not exist: {rel}")
+        if symbol:
+            try:
+                text = target.read_text(encoding="utf-8", errors="replace")
+            except OSError as exc:
+                return Finding("BROKEN", label, f"unreadable: {exc}")
+            if not re.search(r"\b" + re.escape(symbol) + r"\b", text):
+                return Finding("BROKEN", label,
+                               f"'{symbol}' not found in {rel} - renamed or removed")
+        changed = git_last_change(target)
+        if changed and verified and changed > verified:
+            return Finding("STALE", label,
+                           f"file changed {changed}, decision last verified {verified}")
+        if changed:
+            return Finding("OK", label, f"present, unchanged since {changed}")
+        return Finding("OK", label, "present (not tracked by git)")
+
+    if kind in MANUAL:
+        when = parse_date(value) or verified
+        if when and (date.today() - when) > timedelta(days=max_age):
+            age = (date.today() - when).days
+            return Finding("EXPIRED", label,
+                           f"last confirmed {when} ({age}d ago) - re-confirm by hand")
+        return Finding("MANUAL", label, "not machine-checkable - confirm by hand")
+
+    return Finding("MALFORMED", label, f"unknown anchor kind '{kind}'")
+
+
+def check_decision(d: Decision, bases: list, max_age: int) -> Decision:
+    verified = parse_date(d.verified)
+
+    if not d.status:
+        d.findings.append(Finding("MALFORMED", "Status", "missing Status field"))
+    elif d.status not in STATUSES:
+        d.findings.append(Finding("MALFORMED", "Status", f"unknown status '{d.status}'"))
+    if d.status == "ACTIVE" and d.superseded_by.strip(" -—–"):
+        d.findings.append(Finding("MALFORMED", "Status",
+                                  f"ACTIVE but Superseded-by: {d.superseded_by}"))
+    if d.status in ("ACTIVE", "PROPOSED") and not verified:
+        d.findings.append(Finding("MALFORMED", "Verified", "missing or unparsable Verified date"))
+    elif verified and (date.today() - verified) > timedelta(days=max_age):
+        age = (date.today() - verified).days
+        d.findings.append(Finding("EXPIRED", "Verified",
+                                  f"last verified {verified} ({age}d ago, limit {max_age}d)"))
+
+    if d.status in ("SUPERSEDED", "REVERTED"):
+        return d                      # history, not a live claim
+
+    if not d.anchors:
+        d.findings.append(Finding("MALFORMED", "Anchors", "no anchors - decision is unverifiable"))
+    for kind, value in d.anchors:
+        d.findings.append(check_anchor(kind, value, bases, verified, max_age))
+    return d
+
+
+# --------------------------------------------------------------------------
+# Discovery
+# --------------------------------------------------------------------------
+
+def discover(root: Path, cfg: dict) -> list:
+    excl = cfg.get("exclude", [])
+    if cfg.get("paths"):
+        found = []
+        for pattern in cfg["paths"]:
+            found.extend(sorted(root.glob(pattern)))
+    else:
+        found = []
+        for dirpath, dirnames, filenames in os.walk(root):
+            dirnames[:] = [d for d in dirnames if d not in PRUNE and not d.startswith("_")]
+            if RECORD_NAME in filenames:
+                found.append(Path(dirpath) / RECORD_NAME)
+        found.sort()
+    out = []
+    for f in found:
+        try:
+            rel = str(f.relative_to(root))        # 3.8-safe (no is_relative_to)
+        except ValueError:
+            rel = str(f)
+        if any(f.match(p) or Path(rel).match(p) for p in excl):
+            continue
+        out.append(f)
+    return out
+
+
+def collect(target: str | None, root: Path, cfg: dict) -> list:
+    if not target:
+        return discover(root, cfg)
+    for cand in (Path(target), root / target):
+        if cand.is_file():
+            return [cand]
+        if cand.is_dir():
+            direct = sorted(cand.glob(RECORD_NAME))
+            return direct or sorted(cand.glob(f"**/{RECORD_NAME}"))
+    # a bare name like "TICKET-42" anywhere under the root
+    hits = [p for p in discover(root, cfg) if p.parent.name == target]
+    if hits:
+        return hits
+    print(f"anchor-check: no {RECORD_NAME} found for '{target}'", file=sys.stderr)
+    sys.exit(2)
+
+
+# --------------------------------------------------------------------------
+# Scaffolding
+# --------------------------------------------------------------------------
+
+TEMPLATE = """# DECISIONS
+
+> One record per decision, added **when the choice is made**. Every record carries anchors
+> (verifiable handles into this repo) and the date it was last checked, so `anchor-check` can
+> report which decisions still hold without anyone re-reading the whole history.
+>
+> Decisions are append-only: when one stops being true, add a record that supersedes it and set
+> the old one to SUPERSEDED. The rejected alternative is the part no commit records.
+
+Anchor kinds - `code` `test` `sql` `config` `file` `doc` are checked against the tree (add
+`#symbol` to pin a function, class or key); `pr` `issue` `jira` `url` `env` `data` `ship` need a
+human and expire after 90 days, so give them their own date (`env: prod@2026-01-30 - ...`).
+
+---
+
+## D-01 - <the decision, stated as a rule>
+- Status: PROPOSED
+- Decided: {today}
+- Verified: {today} (code-only)
+- Supersedes: -
+- Superseded-by: -
+- Owner: <who made the call>
+- Anchors:
+  - code: <path/to/file.ext>#<symbol>
+
+**Why:** <the reason that cannot be reconstructed from the diff>
+
+**Why not:** <the alternative that was rejected, and what ruled it out>
+
+**Still-true test:** <the cheapest command that proves this still holds>
+"""
+
+RECORD = """
+---
+
+## {id} - {title}
+- Status: PROPOSED
+- Decided: {today}
+- Verified: {today} (code-only)
+- Supersedes: -
+- Superseded-by: -
+- Owner: {owner}
+- Anchors:
+
+**Why:** 
+
+**Why not:** 
+
+**Still-true test:** 
+"""
+
+
+def do_init(target: Path) -> int:
+    path = target / RECORD_NAME if target.is_dir() else target
+    if path.exists():
+        print(f"anchor-check: {path} already exists - not overwriting", file=sys.stderr)
+        return 2
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(TEMPLATE.format(today=date.today().isoformat()), encoding="utf-8")
+    print(f"created {path}\nFill in the D-01 record, then run: anchor-check {path}")
+    return 0
+
+
+def do_new(title: str, target: Path, owner: str) -> int:
+    path = target / RECORD_NAME if target.is_dir() else target
+    if not path.exists():
+        print(f"anchor-check: {path} does not exist - run --init first", file=sys.stderr)
+        return 2
+    existing = parse_decisions(path)
+    prefixes = [d.id.rsplit("-", 1)[0] for d in existing] or ["D"]
+    prefix = prefixes[-1]
+    nums = [int(d.id.rsplit("-", 1)[1]) for d in existing if d.id.startswith(prefix + "-")]
+    new_id = f"{prefix}-{max(nums) + 1:02d}" if nums else f"{prefix}-01"
+    with path.open("a", encoding="utf-8") as fh:
+        fh.write(RECORD.format(id=new_id, title=title, today=date.today().isoformat(), owner=owner))
+    print(f"added {new_id} to {path} - add at least one anchor and the why-not")
+    return 0
+
+
+# --------------------------------------------------------------------------
+# Reporting
+# --------------------------------------------------------------------------
+
+ICON = {"OK": "ok  ", "MANUAL": "man ", "EXPIRED": "EXP ", "STALE": "STALE",
+        "BROKEN": "BROK", "MALFORMED": "MALF"}
+FAIL = {"STALE", "BROKEN", "EXPIRED", "MALFORMED"}
+
+
+def report(decisions: list, root: Path, quiet: bool) -> int:
+    by_file = {}
+    for d in decisions:
+        by_file.setdefault(d.file, []).append(d)
+
+    for fname, group in by_file.items():
+        problems = [d for d in group if d.verdict in FAIL]
+        if quiet and not problems:
+            continue
+        try:
+            shown = Path(fname).relative_to(root)
+        except ValueError:
+            shown = Path(fname)
+        print(f"\n{shown}")
+        for d in group:
+            if quiet and d.verdict not in FAIL:
+                continue
+            print(f"  [{ICON.get(d.verdict, d.verdict)}] {d.id} - {d.title}   "
+                  f"({d.status or 'NO STATUS'}{', verified ' + d.verified if d.verified else ''})")
+            for f in d.findings:
+                if quiet and f.level in ("OK", "MANUAL"):
+                    continue
+                print(f"          {ICON.get(f.level, f.level)}  {f.anchor}")
+                print(f"                 -> {f.detail}")
+
+    total = len(decisions)
+    bad = [d for d in decisions if d.verdict in FAIL]
+    manual = [d for d in decisions if d.verdict == "MANUAL"]
+    print(f"\n{total} decision(s): {total - len(bad)} current, {len(bad)} needing attention, "
+          f"{len(manual)} manual-only")
+    if bad:
+        print("Re-verify the flagged decisions before building on them.")
+    return 1 if bad else 0
+
+
+# --------------------------------------------------------------------------
+
+def main() -> int:
+    ap = argparse.ArgumentParser(
+        prog="anchor-check", description=__doc__,
+        formatter_class=argparse.RawDescriptionHelpFormatter)
+    ap.add_argument("--version", action="version", version=f"anchor-check {__version__}")
+    ap.add_argument("target", nargs="?", help=f"{RECORD_NAME} path, a directory, or a folder name")
+    ap.add_argument("--init", action="store_true", help=f"scaffold a {RECORD_NAME}")
+    ap.add_argument("--new", metavar="TITLE", help="append a new record skeleton")
+    ap.add_argument("--owner", default=os.environ.get("USER", "unknown"),
+                    help="owner recorded by --new")
+    ap.add_argument("--max-age", type=int, help="days before a verification expires (default 90)")
+    ap.add_argument("--json", action="store_true", help="machine-readable output")
+    ap.add_argument("--quiet", action="store_true", help="print only decisions needing attention")
+    ap.add_argument("--root", help="repo root (default: .anchors.json, else .git, else cwd)")
+    args = ap.parse_args()
+
+    root, cfg = find_root(Path.cwd(), args.root)
+    max_age = args.max_age or cfg.get("max_age", 90)
+    bases = [root / cfg.get("anchor_base", ".")]
+
+    if args.init:
+        return do_init(Path(args.target).resolve() if args.target else Path.cwd())
+    if args.new:
+        return do_new(args.new, Path(args.target).resolve() if args.target else Path.cwd(),
+                      args.owner)
+
+    files = collect(args.target, root, cfg)
+    if not files:
+        print(f"anchor-check: no {RECORD_NAME} found under {root} - "
+              f"run 'anchor-check --init' to start one", file=sys.stderr)
+        return 0
+
+    decisions = []
+    for f in files:
+        try:
+            local_bases = bases + [f.parent]
+            decisions.extend(check_decision(d, local_bases, max_age) for d in parse_decisions(f))
+        except OSError as exc:
+            print(f"anchor-check: cannot read {f}: {exc}", file=sys.stderr)
+            return 2
+
+    if args.json:
+        print(json.dumps({"root": str(root), "checked": [str(f) for f in files],
+                          "decisions": [{**asdict(d), "verdict": d.verdict} for d in decisions]},
+                         indent=2, default=str))
+        return 1 if any(d.verdict in FAIL for d in decisions) else 0
+
+    return report(decisions, root, args.quiet)
+
+
+if __name__ == "__main__":
+    sys.exit(main())
