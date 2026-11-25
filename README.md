@@ -140,3 +140,7 @@ install.sh        installer
 ```
 
 Full reasoning and worked examples are in [`GUIDE.md`](GUIDE.md).
+
+## License
+
+MIT — see [`LICENSE`](LICENSE).
