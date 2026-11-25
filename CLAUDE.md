@@ -5,7 +5,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 ## What this is
 
 A distributable Claude Code **skill** (`SKILL.md`) plus a stdlib-only Python CLI (`anchor-check.py`)
-that verifies hand-written decision records (`DECISIONS.md`) against the current code. Version 1.0.1.
+that verifies hand-written decision records (`DECISIONS.md`) against the current code. Version 1.1.0.
 Requirements: Python 3.8+, nothing else; git is optional (only powers the STALE check).
 
 There is no test suite, build step or linter.
@@ -41,7 +41,8 @@ To exercise the checker, run it against a scratch directory containing a hand-ma
   file's own directory.
 - **Feature maps**: `FEATURE_MAP.md` files (the feature-map skill's format) go through
   `parse_feature_map` → `check_map_entry` instead, reusing `Decision`/`Finding` with
-  `id="MAP"`, `status="MAP"`. Only fields whose bold label contains `ubicaci`/`location` (paths)
+  `id="MAP"`, `status="MAP"`. Only fields whose bold label contains `location` (or `ubicaci`, for maps written
+  before feature-map was translated to English) (paths)
   or `selector` (indented sub-items) are read; code fences are skipped. Selector values from
   `[attr="value"]` must appear as a quoted literal in non-`.md` files, first under the entry's
   location, then anywhere under the root.

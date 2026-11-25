@@ -144,7 +144,7 @@ tasks whose `Verify:` uses the map's route and selectors → feature-map's five 
 - **Closing a change:** in the same commit, update the map entry, bump `Verified:` on the affected
   records (or supersede them), and set planned records to `ACTIVE`.
 - **Verification level → `Verified:`:** a full before/after run in the app is `(local)` (or the
-  environment used); feature-map's `VERIFICACIÓN PARCIAL` is `(code-only)`; `NO VERIFICADO`
+  environment used); feature-map's `PARTIAL VERIFICATION` is `(code-only)`; `UNVERIFIED`
   leaves the record `PROPOSED`.
 - **Map invariants are decisions:** a "critical invariant" in a map entry that must not be
   re-litigated gets a `D-xx` record with anchors and a `Why not`; the map line links its id.
