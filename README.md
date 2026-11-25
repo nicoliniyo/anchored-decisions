@@ -137,9 +137,17 @@ templates/        DECISIONS.md · STEERING.md · OPEN-QUESTION.md
 examples/         anchors.json.example
 hooks/pre-commit  ready-to-use git hook
 install.sh        installer
+docs/             kiro-comparison.md
 ```
 
 Full reasoning and worked examples are in [`GUIDE.md`](GUIDE.md).
+
+## Compared with Kiro spec-driven development
+
+Kiro specs plan new work forward (requirements, design, tasks); Anchored Decisions checks that past
+decisions still match the code. They complement each other. See
+[`docs/kiro-comparison.md`](docs/kiro-comparison.md) for a side-by-side table, pros and cons of
+each, and how to use them together.
 
 ## License
 
