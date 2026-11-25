@@ -106,4 +106,23 @@ the decider). When answered, promote the answer to a decision with anchors.
 State scope as a diff against what is **deployed** ("prod runs v1.87.14; this adds X"), never
 against a design document. Deployed versions are checkable; design intent is not.
 
+## Using with spec-driven-development
+
+When the repo also uses a spec workflow (e.g. `addyosmani/agent-skills@spec-driven-development`,
+with `spec/SPEC.md` and `tasks/`), the spec plans *this version*; `DECISIONS.md` holds what must
+stay true *across versions*. Do not copy one into the other.
+
+- **Location:** put `DECISIONS.md` in `spec/`, beside the spec. Default discovery finds it.
+- **Plan phase:** each choice that will outlive the feature gets a `D-xx` record with `Status:
+  PROPOSED`, its anchors and its `Why not` (the spec's plan records risks, not rejected options).
+  Set it to `ACTIVE` when the human approves the plan.
+- **Tasks:** a task's `Verify:` line is a good `Still-true test` for the decision it implements.
+- **Delta specs:** when a delta spec ships, supersede the affected records in the same commit.
+- **Resuming:** run `anchor-check` before building on an existing spec; a flagged decision means
+  the spec may be stale too.
+- **Open questions:** keep them in the spec's Open Questions section, marked `engineering-open` or
+  `needs-a-decider`; promote answers to `D-xx` records.
+- **Don't record twice:** if an ADR skill (e.g. `documentation-and-adrs`) is also installed, use
+  one decision log, not both.
+
 Full procedure with worked examples: `GUIDE.md` in this skill.
