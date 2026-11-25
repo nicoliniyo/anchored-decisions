@@ -27,7 +27,13 @@ anchor-check --new "TITLE"   # append a record skeleton with the next free id
 anchor-check --quiet         # only what needs attention
 anchor-check --json          # for CI or a dashboard
 anchor-check --max-age 60    # stricter expiry window
+anchor-check --no-feature-map  # skip FEATURE_MAP.md files
 ```
+
+Discovery also finds `FEATURE_MAP.md` files (the feature-map skill's format) and checks each
+entry: its code location must exist (BROK if not), and every `[attr="value"]` selector must still
+appear as a quoted string in the code (BROK if renamed or removed). Selectors without an
+`[attr="value"]` part are `man`; placeholder entries are `MALF`.
 
 If `anchor-check` is not on PATH, run `anchor-check.py` from this skill's own folder.
 Exit code `1` whenever something needs attention — usable as a pre-commit hook or CI gate.
@@ -43,14 +49,17 @@ Only needed when records do not live at a discoverable `DECISIONS.md`, or defaul
 
 ```json
 {
-  "paths":       ["tickets/*/DECISIONS.md"],
-  "exclude":     ["archive/**"],
-  "anchor_base": ".",
-  "max_age":     90
+  "paths":        ["tickets/*/DECISIONS.md"],
+  "feature_maps": ["FEATURE_MAP.md"],
+  "feature_map":  true,
+  "exclude":      ["archive/**"],
+  "anchor_base":  ".",
+  "max_age":      90
 }
 ```
 
-Without it, discovery walks the tree for files named `DECISIONS.md`, skipping build and vendor
+`feature_map: false` turns map checks off. Without the file, discovery walks the tree for files
+named `DECISIONS.md` and `FEATURE_MAP.md`, skipping build and vendor
 directories and any directory whose name starts with `_` (so templates never report as failures).
 
 ## Resuming work — tiered, stop as early as you can
@@ -124,5 +133,24 @@ stay true *across versions*. Do not copy one into the other.
   `needs-a-decider`; promote answers to `D-xx` records.
 - **Don't record twice:** if an ADR skill (e.g. `documentation-and-adrs`) is also installed, use
   one decision log, not both.
+
+## Using with feature-map
+
+When the repo also uses the feature-map skill (`FEATURE_MAP.md` plus closed-loop verification in
+the real app), the map says *where a feature lives and how to reach it*; `DECISIONS.md` says *why
+it is built that way*. With spec-driven-development as well: spec → plan (`D-xx` as `PROPOSED`) →
+tasks whose `Verify:` uses the map's route and selectors → feature-map's five phases → close.
+
+- **Closing a change:** in the same commit, update the map entry, bump `Verified:` on the affected
+  records (or supersede them), and set planned records to `ACTIVE`.
+- **Verification level → `Verified:`:** a full before/after run in the app is `(local)` (or the
+  environment used); feature-map's `VERIFICACIÓN PARCIAL` is `(code-only)`; `NO VERIFICADO`
+  leaves the record `PROPOSED`.
+- **Map invariants are decisions:** a "critical invariant" in a map entry that must not be
+  re-litigated gets a `D-xx` record with anchors and a `Why not`; the map line links its id.
+- **Guardrails are anchors:** a lint or CI rule created by feature-map's guardrails workflow is a
+  strong anchor (`config: .eslintrc.json#no-restricted-imports`).
+- **Keep the map honest:** `anchor-check` checks map entries too, so a moved directory or renamed
+  `data-testid` fails the same pre-commit hook and CI gate as a stale decision.
 
 Full procedure with worked examples: `GUIDE.md` in this skill.

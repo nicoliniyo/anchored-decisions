@@ -16,14 +16,22 @@ Works in any repository. No third-party dependencies - stdlib only, Python 3.8+.
     anchor-check --new "Use Postgres advisory locks"
     anchor-check --max-age 60 --quiet
     anchor-check --json
+    anchor-check FEATURE_MAP.md       # check a feature map's paths and selectors
+    anchor-check --no-feature-map     # decisions only
+
+A FEATURE_MAP.md (the feature-map skill's format) is checked too: every entry's
+code location must exist, and every `[attr="value"]` selector must still appear
+as a string literal in the code.
 
 Optional per-repo config, `.anchors.json` at the repo root:
 
     {
-      "paths":       ["tickets/*/DECISIONS.md"],   // where records live
-      "exclude":     ["archive/**"],               // globs to skip
-      "anchor_base": ".",                          // anchors resolve from here
-      "max_age":     90                            // days before a check expires
+      "paths":        ["tickets/*/DECISIONS.md"],  // where records live
+      "feature_maps": ["FEATURE_MAP.md"],          // where feature maps live
+      "feature_map":  true,                        // false = skip feature maps
+      "exclude":      ["archive/**"],              // globs to skip
+      "anchor_base":  ".",                         // anchors resolve from here
+      "max_age":      90                           // days before a check expires
     }
 
 Exit codes:  0 = everything verifiable is current
@@ -47,6 +55,7 @@ __version__ = "1.0.1"
 
 CONFIG_NAME = ".anchors.json"
 RECORD_NAME = "DECISIONS.md"
+MAP_NAME = "FEATURE_MAP.md"
 
 # directories never worth walking into when discovering records
 PRUNE = {".git", ".hg", ".svn", "node_modules", "target", "build", "dist", "out",
@@ -299,24 +308,181 @@ def check_decision(d: Decision, bases: list, max_age: int) -> Decision:
 
 
 # --------------------------------------------------------------------------
+# Feature maps (FEATURE_MAP.md, as written by the feature-map skill)
+# --------------------------------------------------------------------------
+
+MAP_HEAD_RE = re.compile(r"^##\s+(?P<title>.+?)\s*$")
+MAP_FIELD_RE = re.compile(r"^(?P<indent>\s*)[-*]\s*\*\*(?P<label>[^*]+?)\*\*\s*:?\s*(?P<val>.*)$")
+MAP_SUB_RE = re.compile(r"^\s{2,}[-*]\s*(?P<val>.*)$")
+TICK_RE = re.compile(r"`([^`]+)`")
+ATTR_RE = re.compile(r"\[\s*[\w:-]+\s*[*^$|~]?=\s*[\"']([^\"']+)[\"']\s*\]")
+PLACEHOLDERS = {"...", "…", ""}
+MAX_SCAN_BYTES = 2_000_000
+
+
+def is_placeholder(value: str) -> bool:
+    v = value.strip()
+    return v in PLACEHOLDERS or v.startswith("<") or "..." in v or "…" in v
+
+
+def parse_feature_map(path: Path) -> list:
+    """Entries are `## Name` sections; only the location and selector fields are read."""
+    entries, cur, in_sel, in_fence, in_comment = [], None, False, False, False
+    for n, raw in enumerate(path.read_text(encoding="utf-8").splitlines(), 1):
+        line = raw.rstrip()
+        if line.lstrip().startswith("```"):
+            in_fence = not in_fence
+            continue
+        if in_fence:
+            continue
+        if in_comment:
+            in_comment = "-->" not in line
+            continue
+        if "<!--" in line and "-->" not in line:
+            in_comment = True
+            continue
+
+        head = MAP_HEAD_RE.match(line)
+        if head:
+            cur = {"title": head.group("title"), "line": n, "locations": [], "selectors": []}
+            entries.append(cur)
+            in_sel = False
+            continue
+        if cur is None:
+            continue
+        if line.startswith("# "):
+            cur, in_sel = None, False
+            continue
+
+        fld = MAP_FIELD_RE.match(line)
+        if fld and not (in_sel and len(fld.group("indent")) >= 2):
+            label = fld.group("label").strip().rstrip(":").lower()
+            ticks = TICK_RE.findall(fld.group("val"))
+            in_sel = "selector" in label
+            if "ubicaci" in label or "location" in label:
+                cur["locations"].extend(ticks)
+            elif in_sel:
+                cur["selectors"].extend(ticks)
+            continue
+        sub = MAP_SUB_RE.match(line)
+        if sub and in_sel:
+            cur["selectors"].extend(TICK_RE.findall(sub.group("val")))
+        elif line and not line.startswith(" "):
+            in_sel = False
+    return entries
+
+
+_TEXT_CACHE: dict = {}
+
+
+def code_files(base: Path):
+    """Source files under a path, skipping docs, binaries and pruned directories."""
+    if base.is_file():
+        yield base
+        return
+    for dirpath, dirnames, filenames in os.walk(base):
+        dirnames[:] = [d for d in dirnames if d not in PRUNE]
+        for name in filenames:
+            if not name.endswith(".md"):
+                yield Path(dirpath) / name
+
+
+def read_code(path: Path) -> str:
+    if path not in _TEXT_CACHE:
+        text = ""
+        try:
+            if path.stat().st_size <= MAX_SCAN_BYTES:
+                data = path.read_bytes()
+                if b"\0" not in data[:1024]:
+                    text = data.decode("utf-8", errors="replace")
+        except OSError:
+            pass
+        _TEXT_CACHE[path] = text
+    return _TEXT_CACHE[path]
+
+
+def shown(path: Path, root: Path):
+    try:
+        return path.relative_to(root)
+    except ValueError:
+        return path
+
+
+def find_literal(value: str, scopes: list):
+    """First file under the scopes containing value as a quoted string literal."""
+    pattern = re.compile(r"[\"'`]" + re.escape(value) + r"[\"'`]")
+    for scope in scopes:
+        for f in code_files(scope):
+            if pattern.search(read_code(f)):
+                return f
+    return None
+
+
+def check_map_entry(e: dict, path: Path, bases: list, root: Path) -> Decision:
+    d = Decision(id="MAP", title=e["title"], file=str(path), line=e["line"], status="MAP")
+    located = []
+    if not e["locations"]:
+        d.findings.append(Finding("MALFORMED", "Location",
+                                  "no code location in backticks - entry is unverifiable"))
+    for rel in e["locations"]:
+        label = f"location: {rel}"
+        if is_placeholder(rel):
+            d.findings.append(Finding("MALFORMED", label, "placeholder, not a real path"))
+            continue
+        target = resolve(rel, bases)
+        if target is None:
+            d.findings.append(Finding("BROKEN", label, f"path does not exist: {rel}"))
+        else:
+            located.append(target)
+            d.findings.append(Finding("OK", label, "present"))
+
+    for sel in e["selectors"]:
+        label = f"selector: {sel}"
+        values = ATTR_RE.findall(sel)
+        if not values:
+            d.findings.append(Finding("MANUAL", label,
+                                      "no [attr=\"value\"] part - confirm in the running app"))
+            continue
+        for value in values:
+            if is_placeholder(value):
+                d.findings.append(Finding("MALFORMED", label, "placeholder, not a real selector"))
+                continue
+            hit = find_literal(value, located)
+            if hit:
+                d.findings.append(Finding("OK", label, f"'{value}' found in {shown(hit, root)}"))
+                continue
+            hit = find_literal(value, [root])
+            if hit:
+                d.findings.append(Finding("OK", label, f"'{value}' found outside the code "
+                                                       f"location, in {shown(hit, root)}"))
+            else:
+                d.findings.append(Finding("BROKEN", label,
+                                          f"'{value}' not found in the code - renamed or removed"))
+    return d
+
+
+# --------------------------------------------------------------------------
 # Discovery
 # --------------------------------------------------------------------------
 
-def discover(root: Path, cfg: dict) -> list:
+def discover(root: Path, cfg: dict, maps: bool = True) -> list:
+    """Configured globs where given, else a walk for the default file names."""
     excl = cfg.get("exclude", [])
-    if cfg.get("paths"):
-        found = []
-        for pattern in cfg["paths"]:
-            found.extend(sorted(root.glob(pattern)))
-    else:
-        found = []
+    found, walk_for = [], set()
+    for key, name, wanted in (("paths", RECORD_NAME, True), ("feature_maps", MAP_NAME, maps)):
+        if not wanted:
+            continue
+        if cfg.get(key):
+            for pattern in cfg[key]:
+                found.extend(root.glob(pattern))
+        else:
+            walk_for.add(name)
+    if walk_for:
         for dirpath, dirnames, filenames in os.walk(root):
             dirnames[:] = [d for d in dirnames if d not in PRUNE and not d.startswith("_")]
-            if RECORD_NAME in filenames:
-                found.append(Path(dirpath) / RECORD_NAME)
-        found.sort()
+            found.extend(Path(dirpath) / n for n in walk_for if n in filenames)
     out = []
-    for f in found:
+    for f in sorted(set(found)):
         try:
             rel = str(f.relative_to(root))        # 3.8-safe (no is_relative_to)
         except ValueError:
@@ -327,17 +493,18 @@ def discover(root: Path, cfg: dict) -> list:
     return out
 
 
-def collect(target: str | None, root: Path, cfg: dict) -> list:
+def collect(target: str | None, root: Path, cfg: dict, maps: bool = True) -> list:
     if not target:
-        return discover(root, cfg)
+        return discover(root, cfg, maps)
+    names = [RECORD_NAME] + ([MAP_NAME] if maps else [])
     for cand in (Path(target), root / target):
         if cand.is_file():
             return [cand]
         if cand.is_dir():
-            direct = sorted(cand.glob(RECORD_NAME))
-            return direct or sorted(cand.glob(f"**/{RECORD_NAME}"))
+            direct = sorted(p for n in names for p in cand.glob(n))
+            return direct or sorted(p for n in names for p in cand.glob(f"**/{n}"))
     # a bare name like "TICKET-42" anywhere under the root
-    hits = [p for p in discover(root, cfg) if p.parent.name == target]
+    hits = [p for p in discover(root, cfg, maps) if p.parent.name == target]
     if hits:
         return hits
     print(f"anchor-check: no {RECORD_NAME} found for '{target}'", file=sys.stderr)
@@ -464,10 +631,14 @@ def report(decisions: list, root: Path, quiet: bool) -> int:
     total = len(decisions)
     bad = [d for d in decisions if d.verdict in FAIL]
     manual = [d for d in decisions if d.verdict == "MANUAL"]
-    print(f"\n{total} decision(s): {total - len(bad)} current, {len(bad)} needing attention, "
+    n_map = sum(1 for d in decisions if d.status == "MAP")
+    what = (f"{total} decision(s)" if not n_map else
+            f"{total} record(s) ({total - n_map} decisions, {n_map} feature-map entries)")
+    print(f"\n{what}: {total - len(bad)} current, {len(bad)} needing attention, "
           f"{len(manual)} manual-only")
     if bad:
-        print("Re-verify the flagged decisions before building on them.")
+        print(f"Re-verify the flagged {'records' if n_map else 'decisions'} "
+              f"before building on them.")
     return 1 if bad else 0
 
 
@@ -487,6 +658,8 @@ def main() -> int:
     ap.add_argument("--json", action="store_true", help="machine-readable output")
     ap.add_argument("--quiet", action="store_true", help="print only decisions needing attention")
     ap.add_argument("--root", help="repo root (default: .anchors.json, else .git, else cwd)")
+    ap.add_argument("--no-feature-map", action="store_true",
+                    help=f"skip {MAP_NAME} files during discovery")
     args = ap.parse_args()
 
     root, cfg = find_root(Path.cwd(), args.root)
@@ -499,7 +672,8 @@ def main() -> int:
         return do_new(args.new, Path(args.target).resolve() if args.target else Path.cwd(),
                       args.owner)
 
-    files = collect(args.target, root, cfg)
+    maps = not args.no_feature_map and cfg.get("feature_map", True) is not False
+    files = collect(args.target, root, cfg, maps)
     if not files:
         print(f"anchor-check: no {RECORD_NAME} found under {root} - "
               f"run 'anchor-check --init' to start one", file=sys.stderr)
@@ -509,6 +683,10 @@ def main() -> int:
     for f in files:
         try:
             local_bases = bases + [f.parent]
+            if f.name == MAP_NAME:
+                decisions.extend(check_map_entry(e, f, local_bases, root)
+                                 for e in parse_feature_map(f))
+                continue
             decisions.extend(check_decision(d, local_bases, max_age) for d in parse_decisions(f))
         except OSError as exc:
             print(f"anchor-check: cannot read {f}: {exc}", file=sys.stderr)

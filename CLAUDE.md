@@ -39,6 +39,12 @@ To exercise the checker, run it against a scratch directory containing a hand-ma
   than `Verified:`. `MANUAL` kinds only expire after `max_age`, using their own date if present.
   Unknown kind → MALFORMED. Anchors resolve against `anchor_base` from config, then the record
   file's own directory.
+- **Feature maps**: `FEATURE_MAP.md` files (the feature-map skill's format) go through
+  `parse_feature_map` → `check_map_entry` instead, reusing `Decision`/`Finding` with
+  `id="MAP"`, `status="MAP"`. Only fields whose bold label contains `ubicaci`/`location` (paths)
+  or `selector` (indented sub-items) are read; code fences are skipped. Selector values from
+  `[attr="value"]` must appear as a quoted literal in non-`.md` files, first under the entry's
+  location, then anywhere under the root.
 - **Verdict precedence**: BROKEN > STALE > EXPIRED > MALFORMED > MANUAL > OK.
   SUPERSEDED/REVERTED records skip anchor checks (history, not live claims).
 - **Discovery pruning** (`PRUNE`): build/vendor dirs, agent-tooling dirs (`.claude`, `.cursor`, …,

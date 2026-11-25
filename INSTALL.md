@@ -51,14 +51,17 @@ cp examples/anchors.json.example .anchors.json
 
 ```json
 {
-  "paths":       ["tickets/*/DECISIONS.md"],
-  "exclude":     ["archive/**"],
-  "anchor_base": ".",
-  "max_age":     90
+  "paths":        ["tickets/*/DECISIONS.md"],
+  "feature_maps": ["FEATURE_MAP.md"],
+  "feature_map":  true,
+  "exclude":      ["archive/**"],
+  "anchor_base":  ".",
+  "max_age":      90
 }
 ```
 
-Without it, discovery walks the tree for `DECISIONS.md`, skipping build/vendor directories and any
+`"feature_map": false` turns map checks off. Without it, discovery walks the tree for
+`DECISIONS.md` and `FEATURE_MAP.md`, skipping build/vendor directories and any
 directory whose name starts with `_` (so templates never report as failures).
 
 ## Gating a commit or a build

@@ -98,7 +98,13 @@ anchor-check --new "TITLE"   # append a record skeleton with the next free id
 anchor-check --quiet         # only what needs attention
 anchor-check --json          # for CI or a dashboard
 anchor-check --max-age 60    # stricter expiry window (default 90 days)
+anchor-check --no-feature-map  # skip FEATURE_MAP.md files
 ```
+
+`anchor-check` also checks `FEATURE_MAP.md` files written by the
+[feature-map](https://github.com/nicoliniyo/feature-map) skill: each entry's code location must
+exist, and each `[attr="value"]` selector (`data-testid`, `aria-label`, …) must still appear as a
+quoted string in the code. A moved directory or renamed selector reports `BROK`.
 
 Exit `0` = everything verifiable is current · `1` = something needs attention · `2` = usage error.
 
@@ -135,14 +141,17 @@ Only needed when records don't live at a discoverable `DECISIONS.md`. Copy
 
 ```json
 {
-  "paths":       ["tickets/*/DECISIONS.md"],
-  "exclude":     ["archive/**"],
-  "anchor_base": ".",
-  "max_age":     90
+  "paths":        ["tickets/*/DECISIONS.md"],
+  "feature_maps": ["FEATURE_MAP.md"],
+  "feature_map":  true,
+  "exclude":      ["archive/**"],
+  "anchor_base":  ".",
+  "max_age":      90
 }
 ```
 
-Without it, discovery walks the tree for `DECISIONS.md`, skipping build and vendor directories,
+`"feature_map": false` turns map checks off. Without it, discovery walks the tree for
+`DECISIONS.md` and `FEATURE_MAP.md`, skipping build and vendor directories,
 agent-tooling directories such as `.claude`, and any directory whose name starts with `_`.
 
 ## What's in here
