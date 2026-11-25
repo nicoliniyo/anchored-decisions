@@ -11,6 +11,9 @@ re-derives only what actually drifted, instead of re-running the whole discovery
 Requirements: Python 3.8+. No packages, no network, no services. Git is optional; without it the
 "changed since verification" check is skipped.
 
+New to this? [`docs/how-it-works.md`](docs/how-it-works.md) explains, in non-technical language with
+diagrams, how this skill works together with spec-driven-development and feature-map.
+
 ## Why
 
 Written decisions drift from code in two ways:
@@ -166,7 +169,7 @@ templates/        DECISIONS.md · STEERING.md · OPEN-QUESTION.md
 examples/         anchors.json.example
 hooks/pre-commit  ready-to-use git hook
 install.sh        installer
-docs/             kiro-comparison.md
+docs/             how-it-works.md · kiro-comparison.md
 ```
 
 Full reasoning and worked examples are in [`GUIDE.md`](GUIDE.md).
