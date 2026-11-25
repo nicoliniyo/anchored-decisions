@@ -10,7 +10,7 @@ Kiro has no documented automatic check that specs still match the code; Anchored
 
 ## What each one is
 
-**Anchored Decisions** is a Claude Code skill plus `anchor-check`, a stdlib-only Python CLI. Decisions live in `DECISIONS.md` files as `D-xx` records with Status, Verified date, anchors, Why and Why not. `anchor-check` resolves each anchor (file, `#symbol`, git history) and reports ok, man, STALE, BROK, EXP or MALF. It ships with templates for a steering file and open questions, a pre-commit hook and an installer.
+**Anchored Decisions** is a Claude Code skill plus `anchor-check`, a stdlib-only Python CLI. Decisions live in `DECISIONS.md` files as `D-xx` records with Status, Verified date, anchors, Why and Why not. `anchor-check` resolves each anchor (file, `#symbol`, git history) and reports ok, man, STALE, BROK, EXP or MALF. It ships with templates for a steering file and open questions, a pre-commit hook and an installer. Since v1.1.0 it also checks `FEATURE_MAP.md` files, and since v1.2.0 either check runs on its own with `--decisions-only` or `--feature-map-only`.
 
 **Kiro spec-driven development** is the spec workflow of the Kiro IDE and CLI. A spec lives in `.kiro/specs/<feature>/` as `requirements.md` (or `bugfix.md`), `design.md` and `tasks.md`, written in three phases ([Specs](https://kiro.dev/docs/specs/)). Requirements use EARS notation: "WHEN \[condition\] THE SYSTEM SHALL \[behavior\]" ([Feature specs](https://kiro.dev/docs/specs/feature-specs/)). Around specs sit:
 
@@ -33,7 +33,7 @@ The sharpest difference is drift: Anchored Decisions checks records against code
 | Behaviour checks | None; only file, symbol and git date | Optional property-based tests from EARS (IDE only) |
 | Task execution | Not covered | Tasks tracked, run in dependency waves |
 | Project context | `STEERING.md` template, hand-loaded | `.kiro/steering/` with four inclusion modes |
-| Automation | `pre-commit` hook, CI exit code, `--json` | Agent hooks on file, tool, prompt and task events |
+| Automation | `pre-commit` hook, CI exit code, `--json`, `--decisions-only` / `--feature-map-only` | Agent hooks on file, tool, prompt and task events |
 | Tooling needed | Python 3.8+, any editor or agent | Kiro IDE or Kiro CLI |
 | History | Append-only; supersede, never edit | Specs edited in place; history is git |
 | Cost | Free, MIT | Kiro account; pricing not checked |
@@ -112,7 +112,7 @@ Its strength is a full, agent-driven path from idea to tasks; its weakness is th
 - **Costly to run.** Starting the real app takes time, tools (browser, simulators) and permissions that CI or sandboxes may deny.
 - **No planning.** It works inside a task; deciding what to build is left to a spec tool.
 
-**With the other two:** a spec tool (Kiro or spec-driven-development) decides what to build; feature-map proves each task in the running app, using the map for routes and selectors; Anchored Decisions records why, and one `anchor-check` run checks decisions and the map together. feature-map's results also set the record's `Verified:` level: full run → `(local)`, PARTIAL VERIFICATION → `(code-only)`, UNVERIFIED → the record stays `PROPOSED`.
+**With the other two:** a spec tool (Kiro or spec-driven-development) decides what to build; feature-map proves each task in the running app, using the map for routes and selectors; Anchored Decisions records why, and one `anchor-check` run checks decisions and the map together, or either alone with `--decisions-only` or `--feature-map-only`. feature-map's results also set the record's `Verified:` level: full run → `(local)`, PARTIAL VERIFICATION → `(code-only)`, UNVERIFIED → the record stays `PROPOSED`.
 
 ## Using them together, and recommendation
 
@@ -131,4 +131,4 @@ Choose one alone only when:
 
 ## Sources
 
-Kiro pages read on 2026-11-25: [Specs](https://kiro.dev/docs/specs/) · [Feature specs](https://kiro.dev/docs/specs/feature-specs/) · [Bugfix specs](https://kiro.dev/docs/specs/bugfix-specs/) · [Best practices](https://kiro.dev/docs/specs/best-practices/) · [Correctness](https://kiro.dev/docs/specs/correctness/) · [Steering](https://kiro.dev/docs/steering/) · [Hooks](https://kiro.dev/docs/hooks/) · [Hook types](https://kiro.dev/docs/hooks/types/). Anchored Decisions: [repository](https://github.com/nicoliniyo/anchored-decisions), v1.1.0. feature-map: [repository](https://github.com/nicoliniyo/feature-map), v1.0.0. Kiro pricing was not checked.
+Kiro pages read on 2026-11-25: [Specs](https://kiro.dev/docs/specs/) · [Feature specs](https://kiro.dev/docs/specs/feature-specs/) · [Bugfix specs](https://kiro.dev/docs/specs/bugfix-specs/) · [Best practices](https://kiro.dev/docs/specs/best-practices/) · [Correctness](https://kiro.dev/docs/specs/correctness/) · [Steering](https://kiro.dev/docs/steering/) · [Hooks](https://kiro.dev/docs/hooks/) · [Hook types](https://kiro.dev/docs/hooks/types/). Anchored Decisions: [repository](https://github.com/nicoliniyo/anchored-decisions), v1.2.0. feature-map: [repository](https://github.com/nicoliniyo/feature-map), v1.0.0. Kiro pricing was not checked.
