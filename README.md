@@ -26,8 +26,27 @@ rationale (including what was rejected, the *why not*), and constraints learned 
 
 ## Install
 
+### With `npx skills`
+
 ```bash
-git clone git@github.com:nicoliniyo/anchored-decisions.git
+npx skills add nicoliniyo/anchored-decisions -g   # user scope: every project on this machine
+npx skills add nicoliniyo/anchored-decisions      # project scope: the current repo only
+```
+
+User scope installs to `~/.claude/skills/anchored-decisions/`. The skills CLI does not put the
+`anchor-check` command on your PATH; Claude runs `anchor-check.py` from the skill folder either
+way. To use the command yourself, link it:
+
+```bash
+ln -s ~/.claude/skills/anchored-decisions/anchor-check.py ~/.local/bin/anchor-check
+```
+
+Update later with `npx skills update`.
+
+### With the installer
+
+```bash
+git clone https://github.com/nicoliniyo/anchored-decisions.git
 cd anchored-decisions
 ./install.sh                       # user scope: every project on this machine
 ./install.sh --project /path/repo  # project scope: committed with that repo, shared with the team
