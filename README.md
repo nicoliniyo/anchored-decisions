@@ -175,7 +175,7 @@ Full reasoning and worked examples are in [`GUIDE.md`](GUIDE.md).
 Kiro specs plan new work forward (requirements, design, tasks); Anchored Decisions checks that past
 decisions still match the code. They complement each other. See
 [`docs/kiro-comparison.md`](docs/kiro-comparison.md) for a side-by-side table, pros and cons of
-each, and how to use them together.
+each, where [feature-map](https://github.com/nicoliniyo/feature-map) fits, and how to use them together.
 
 ## License
 

@@ -81,6 +81,39 @@ Its strength is a full, agent-driven path from idea to tasks; its weakness is th
 - **Heavier per change.** Three files per feature; Quick Spec exists to skip the approval gates for small work.
 - **Hook rough edges.** File hooks fire only on agent-made changes, not manual edits, and the docs use two names for the same trigger ([Hooks](https://kiro.dev/docs/hooks/)).
 
+## Where feature-map fits
+
+[feature-map](https://github.com/nicoliniyo/feature-map) adds what neither tool above covers: proving a change works in the running app, and a map of where each feature lives. Kiro's closest equivalents are its optional property-based tests and hooks; Anchored Decisions v1.1.0 checks feature-map's map.
+
+| Dimension | feature-map | Kiro SDD's closest equivalent |
+| --- | --- | --- |
+| Main job | Prove a change works in the real app | Correctness tests, plus hooks that run test commands |
+| How it verifies | Before/after run of the same scenario: browser (CDP, Playwright), simulator, or the real binary | Property-based tests generated from EARS, run on demand (IDE only) |
+| When the check can't run | Report starts with PARTIAL VERIFICATION or UNVERIFIED, plus the steps left; denied permissions are never worked around | Not documented |
+| Where features live | `FEATURE_MAP.md`: code location, navigation path, selectors, invariants per feature | Steering `structure.md`, project-level |
+| Recurring agent mistakes | Turned into lint or CI rules (guardrails) | Pre Tool Use hooks that can block tools; steering rules |
+| Drift check on its own file | `anchor-check` flags missing code locations and renamed selectors | None |
+| Tooling needed | Any agent that reads `SKILL.md` | Kiro IDE or Kiro CLI |
+| Cost | Free, MIT | Kiro account; pricing not checked |
+
+**Pros**
+
+- **Evidence, not claims.** A change counts as done only after the same scenario passes in the real app, with before/after evidence in the report.
+- **Honest when blocked.** PARTIAL VERIFICATION and UNVERIFIED markers say exactly what wasn't checked and how to finish.
+- **Deterministic navigation.** Map selectors feed Playwright or CDP directly, and vague reports are matched against them before guessing.
+- **Hardens over time.** Repeated mistakes become lint or CI rules, which also make strong anchors for decisions.
+- **Tool-agnostic and checkable.** Works in any agent that reads skills; `anchor-check` keeps the map's paths and selectors honest.
+
+**Cons**
+
+- **Doesn't improve correctness on its own evals.** Every agent fixed its task with or without the skill; it made the evidence more thorough, not the fix more likely.
+- **Evals predate the English version.** They ran on the earlier Spanish text and haven't been re-run.
+- **Partly unchecked map.** `anchor-check` covers code locations and `[attr="value"]` selectors; navigation paths and invariants can still drift.
+- **Costly to run.** Starting the real app takes time, tools (browser, simulators) and permissions that CI or sandboxes may deny.
+- **No planning.** It works inside a task; deciding what to build is left to a spec tool.
+
+**With the other two:** a spec tool (Kiro or spec-driven-development) decides what to build; feature-map proves each task in the running app, using the map for routes and selectors; Anchored Decisions records why, and one `anchor-check` run checks decisions and the map together. feature-map's results also set the record's `Verified:` level: full run → `(local)`, PARTIAL VERIFICATION → `(code-only)`, UNVERIFIED → the record stays `PROPOSED`.
+
 ## Using them together, and recommendation
 
 Recommendation: use Kiro specs to plan and build each feature, and Anchored Decisions to keep the decisions that outlive the feature checkable.
@@ -98,4 +131,4 @@ Choose one alone only when:
 
 ## Sources
 
-Kiro pages read on 2026-11-25: [Specs](https://kiro.dev/docs/specs/) · [Feature specs](https://kiro.dev/docs/specs/feature-specs/) · [Bugfix specs](https://kiro.dev/docs/specs/bugfix-specs/) · [Best practices](https://kiro.dev/docs/specs/best-practices/) · [Correctness](https://kiro.dev/docs/specs/correctness/) · [Steering](https://kiro.dev/docs/steering/) · [Hooks](https://kiro.dev/docs/hooks/) · [Hook types](https://kiro.dev/docs/hooks/types/). Anchored Decisions: [repository](https://github.com/nicoliniyo/anchored-decisions), v1.0.0. Kiro pricing was not checked.
+Kiro pages read on 2026-11-25: [Specs](https://kiro.dev/docs/specs/) · [Feature specs](https://kiro.dev/docs/specs/feature-specs/) · [Bugfix specs](https://kiro.dev/docs/specs/bugfix-specs/) · [Best practices](https://kiro.dev/docs/specs/best-practices/) · [Correctness](https://kiro.dev/docs/specs/correctness/) · [Steering](https://kiro.dev/docs/steering/) · [Hooks](https://kiro.dev/docs/hooks/) · [Hook types](https://kiro.dev/docs/hooks/types/). Anchored Decisions: [repository](https://github.com/nicoliniyo/anchored-decisions), v1.1.0. feature-map: [repository](https://github.com/nicoliniyo/feature-map), v1.0.0. Kiro pricing was not checked.
