@@ -43,7 +43,7 @@ from dataclasses import dataclass, field, asdict
 from datetime import date, datetime, timedelta
 from pathlib import Path
 
-__version__ = "1.0.0"
+__version__ = "1.0.1"
 
 CONFIG_NAME = ".anchors.json"
 RECORD_NAME = "DECISIONS.md"
