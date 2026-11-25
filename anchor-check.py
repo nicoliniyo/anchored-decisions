@@ -17,7 +17,8 @@ Works in any repository. No third-party dependencies - stdlib only, Python 3.8+.
     anchor-check --max-age 60 --quiet
     anchor-check --json
     anchor-check FEATURE_MAP.md       # check a feature map's paths and selectors
-    anchor-check --no-feature-map     # decisions only
+    anchor-check --decisions-only     # skip feature maps (alias: --no-feature-map)
+    anchor-check --feature-map-only   # skip decisions
 
 A FEATURE_MAP.md (the feature-map skill's format) is checked too: every entry's
 code location must exist, and every `[attr="value"]` selector must still appear
@@ -465,11 +466,12 @@ def check_map_entry(e: dict, path: Path, bases: list, root: Path) -> Decision:
 # Discovery
 # --------------------------------------------------------------------------
 
-def discover(root: Path, cfg: dict, maps: bool = True) -> list:
+def discover(root: Path, cfg: dict, maps: bool = True, decisions: bool = True) -> list:
     """Configured globs where given, else a walk for the default file names."""
     excl = cfg.get("exclude", [])
     found, walk_for = [], set()
-    for key, name, wanted in (("paths", RECORD_NAME, True), ("feature_maps", MAP_NAME, maps)):
+    for key, name, wanted in (("paths", RECORD_NAME, decisions),
+                              ("feature_maps", MAP_NAME, maps)):
         if not wanted:
             continue
         if cfg.get(key):
@@ -493,10 +495,11 @@ def discover(root: Path, cfg: dict, maps: bool = True) -> list:
     return out
 
 
-def collect(target: str | None, root: Path, cfg: dict, maps: bool = True) -> list:
+def collect(target: str | None, root: Path, cfg: dict, maps: bool = True,
+            decisions: bool = True) -> list:
     if not target:
-        return discover(root, cfg, maps)
-    names = [RECORD_NAME] + ([MAP_NAME] if maps else [])
+        return discover(root, cfg, maps, decisions)
+    names = ([RECORD_NAME] if decisions else []) + ([MAP_NAME] if maps else [])
     for cand in (Path(target), root / target):
         if cand.is_file():
             return [cand]
@@ -504,10 +507,10 @@ def collect(target: str | None, root: Path, cfg: dict, maps: bool = True) -> lis
             direct = sorted(p for n in names for p in cand.glob(n))
             return direct or sorted(p for n in names for p in cand.glob(f"**/{n}"))
     # a bare name like "TICKET-42" anywhere under the root
-    hits = [p for p in discover(root, cfg, maps) if p.parent.name == target]
+    hits = [p for p in discover(root, cfg, maps, decisions) if p.parent.name == target]
     if hits:
         return hits
-    print(f"anchor-check: no {RECORD_NAME} found for '{target}'", file=sys.stderr)
+    print(f"anchor-check: no {' or '.join(names)} found for '{target}'", file=sys.stderr)
     sys.exit(2)
 
 
@@ -658,8 +661,11 @@ def main() -> int:
     ap.add_argument("--json", action="store_true", help="machine-readable output")
     ap.add_argument("--quiet", action="store_true", help="print only decisions needing attention")
     ap.add_argument("--root", help="repo root (default: .anchors.json, else .git, else cwd)")
-    ap.add_argument("--no-feature-map", action="store_true",
-                    help=f"skip {MAP_NAME} files during discovery")
+    only = ap.add_mutually_exclusive_group()
+    only.add_argument("--decisions-only", "--no-feature-map", dest="decisions_only",
+                      action="store_true", help=f"check only {RECORD_NAME} files")
+    only.add_argument("--feature-map-only", action="store_true",
+                      help=f"check only {MAP_NAME} files")
     args = ap.parse_args()
 
     root, cfg = find_root(Path.cwd(), args.root)
@@ -672,11 +678,17 @@ def main() -> int:
         return do_new(args.new, Path(args.target).resolve() if args.target else Path.cwd(),
                       args.owner)
 
-    maps = not args.no_feature_map and cfg.get("feature_map", True) is not False
-    files = collect(args.target, root, cfg, maps)
+    # an explicit --feature-map-only wins over "feature_map": false in the config
+    maps = args.feature_map_only or (not args.decisions_only
+                                     and cfg.get("feature_map", True) is not False)
+    decisions_wanted = not args.feature_map_only
+    files = collect(args.target, root, cfg, maps, decisions_wanted)
     if not files:
-        print(f"anchor-check: no {RECORD_NAME} found under {root} - "
-              f"run 'anchor-check --init' to start one", file=sys.stderr)
+        if decisions_wanted:
+            print(f"anchor-check: no {RECORD_NAME} found under {root} - "
+                  f"run 'anchor-check --init' to start one", file=sys.stderr)
+        else:
+            print(f"anchor-check: no {MAP_NAME} found under {root}", file=sys.stderr)
         return 0
 
     decisions = []

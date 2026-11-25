@@ -27,7 +27,8 @@ anchor-check --new "TITLE"   # append a record skeleton with the next free id
 anchor-check --quiet         # only what needs attention
 anchor-check --json          # for CI or a dashboard
 anchor-check --max-age 60    # stricter expiry window
-anchor-check --no-feature-map  # skip FEATURE_MAP.md files
+anchor-check --decisions-only    # only DECISIONS.md (alias: --no-feature-map)
+anchor-check --feature-map-only  # only FEATURE_MAP.md
 ```
 
 Discovery also finds `FEATURE_MAP.md` files (the feature-map skill's format) and checks each
